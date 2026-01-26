@@ -41,12 +41,12 @@ if ADMIN_IDS_RAW:
         if x.isdigit():
             ADMIN_IDS.add(int(x))
 
-SHOP_NAME = os.getenv("SHOP_NAME", "Оптом_озик_овкат Мадина").strip()
+SHOP_NAME = os.getenv("SHOP_NAME", "Оптом озик овкат Мадина").strip()
 
 if not BOT_TOKEN:
-    raise RuntimeError("TELEGRAM_TOKEN environment yo‘q")
+    raise RuntimeError("TELEGRAM_TOKEN environment yo'q")
 if not WEBHOOK_URL or not WEBHOOK_URL.startswith("https://") or not WEBHOOK_URL.endswith("/webhook"):
-    raise RuntimeError("WEBHOOK_URL noto‘g‘ri. Masalan: https://<service>.onrender.com/webhook")
+    raise RuntimeError("WEBHOOK_URL noto'g'ri. Masalan: https://<service>.onrender.com/webhook")
 
 DB_PATH = os.getenv("DB_PATH", "data.db")
 
@@ -99,16 +99,16 @@ async def safe_edit_media(query, photo_url: str, caption: str, reply_markup=None
         if "Message is not modified" in str(e):
             return
         # Ba'zan "message can't be edited" bo'lishi mumkin — unda textga qaytamiz
-        raise
+        await safe_edit_text(query, caption, reply_markup=reply_markup, parse_mode=parse_mode)
 
 # ================== DB ==================
-def db() -> sqlite3.Connection:
+def get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db() -> None:
-    conn = db()
+    conn = get_db()
     cur = conn.cursor()
     cur.execute("""
     CREATE TABLE IF NOT EXISTS categories (
@@ -155,10 +155,10 @@ def init_db() -> None:
     )""")
     conn.commit()
 
-    # Seed categories (agar bo‘sh bo‘lsa)
+    # Seed categories (agar bo'sh bo'lsa)
     cur.execute("SELECT COUNT(*) AS c FROM categories")
     if cur.fetchone()["c"] == 0:
-        for cname in ["🥬 Sabzavot", "🍎 Meva", "🍗 Go‘sht", "🐟 Baliq", "🥛 Sut", "🥫 Konserva", "🥖 Non", "🍚 Don", "🍫 Shirinlik", "🧴 Uy-ro‘zg‘or"]:
+        for cname in ["🥬 Sabzavot", "🍎 Meva", "🍗 Go'sht", "🐟 Baliq", "🥛 Sut", "🥫 Konserva", "🥖 Non", "🍚 Don", "🍫 Shirinlik", "🧴 Uy-ro'zg'or"]:
             cur.execute("INSERT OR IGNORE INTO categories(name) VALUES(?)", (cname,))
         conn.commit()
 
@@ -166,11 +166,11 @@ def init_db() -> None:
     cur.execute("SELECT COUNT(*) AS c FROM products")
     if cur.fetchone()["c"] == 0:
         demo = [
-            ("🥬 Sabzavot", "Pomidor", "Yangi pomidor. 1 kg.", 0, "https://source.unsplash.com/800x600/?tomatoes"),
-            ("🥬 Sabzavot", "Bodring", "Yangi bodring. 1 kg.", 0, "https://source.unsplash.com/800x600/?cucumber"),
-            ("🍗 Go‘sht", "Tovuq", "Butun tovuq (taxminiy 1.2-1.5kg).", 0, "https://source.unsplash.com/800x600/?chicken,food"),
-            ("🥛 Sut", "Sut 1L", "1 litr sut.", 0, "https://source.unsplash.com/800x600/?milk,bottle"),
-            ("🥖 Non", "Non", "Issiq non.", 0, "https://source.unsplash.com/800x600/?bread"),
+            ("🥬 Sabzavot", "Pomidor", "Yangi pomidor. 1 kg.", 15.0, "https://source.unsplash.com/800x600/?tomatoes"),
+            ("🥬 Sabzavot", "Bodring", "Yangi bodring. 1 kg.", 10.0, "https://source.unsplash.com/800x600/?cucumber"),
+            ("🍗 Go'sht", "Tovuq", "Butun tovuq (taxminiy 1.2-1.5kg).", 45.0, "https://source.unsplash.com/800x600/?chicken,food"),
+            ("🥛 Sut", "Sut 1L", "1 litr sut.", 8.0, "https://source.unsplash.com/800x600/?milk,bottle"),
+            ("🥖 Non", "Non", "Issiq non.", 3.0, "https://source.unsplash.com/800x600/?bread"),
         ]
         for catname, name, desc, price, photo in demo:
             cur.execute("SELECT id FROM categories WHERE name=?", (catname,))
@@ -191,13 +191,13 @@ def money(x: float) -> str:
     return f"{x:.2f} SAR"
 
 def get_categories() -> List[sqlite3.Row]:
-    conn = db()
+    conn = get_db()
     rows = conn.execute("SELECT id, name FROM categories ORDER BY name").fetchall()
     conn.close()
     return rows
 
 def get_products(category_id: int, only_active: bool = True) -> List[sqlite3.Row]:
-    conn = db()
+    conn = get_db()
     q = "SELECT * FROM products WHERE category_id=?"
     params = [category_id]
     if only_active:
@@ -208,13 +208,13 @@ def get_products(category_id: int, only_active: bool = True) -> List[sqlite3.Row
     return rows
 
 def get_product(pid: int) -> Optional[sqlite3.Row]:
-    conn = db()
+    conn = get_db()
     row = conn.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
     conn.close()
     return row
 
 def cart_add(user_id: int, pid: int, qty: int = 1) -> None:
-    conn = db()
+    conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT qty FROM carts WHERE user_id=? AND product_id=?", (user_id, pid))
     r = cur.fetchone()
@@ -226,7 +226,7 @@ def cart_add(user_id: int, pid: int, qty: int = 1) -> None:
     conn.close()
 
 def cart_set(user_id: int, pid: int, qty: int) -> None:
-    conn = db()
+    conn = get_db()
     cur = conn.cursor()
     if qty <= 0:
         cur.execute("DELETE FROM carts WHERE user_id=? AND product_id=?", (user_id, pid))
@@ -236,7 +236,7 @@ def cart_set(user_id: int, pid: int, qty: int) -> None:
     conn.close()
 
 def cart_items(user_id: int) -> List[sqlite3.Row]:
-    conn = db()
+    conn = get_db()
     rows = conn.execute("""
         SELECT c.product_id, c.qty, p.name, p.price_sar, p.photo_url
         FROM carts c
@@ -252,7 +252,7 @@ def cart_total(user_id: int) -> float:
     return sum(float(i["price_sar"]) * int(i["qty"]) for i in items)
 
 def cart_clear(user_id: int) -> None:
-    conn = db()
+    conn = get_db()
     conn.execute("DELETE FROM carts WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
@@ -262,7 +262,7 @@ def create_order(user_id: int, phone: str, address: str, note: str) -> int:
     total = cart_total(user_id)
     if not items:
         return -1
-    conn = db()
+    conn = get_db()
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO orders(user_id, phone, address, note, total_sar, status, created_at)
@@ -280,13 +280,13 @@ def create_order(user_id: int, phone: str, address: str, note: str) -> int:
     return oid
 
 def list_orders(limit: int = 20) -> List[sqlite3.Row]:
-    conn = db()
+    conn = get_db()
     rows = conn.execute("SELECT * FROM orders ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     conn.close()
     return rows
 
 def order_details(order_id: int) -> Tuple[Optional[sqlite3.Row], List[sqlite3.Row]]:
-    conn = db()
+    conn = get_db()
     o = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
     items = conn.execute("SELECT * FROM order_items WHERE order_id=?", (order_id,)).fetchall()
     conn.close()
@@ -313,7 +313,7 @@ def kb_categories() -> InlineKeyboardMarkup:
 def kb_product(pid: int) -> InlineKeyboardMarkup:
     rows = [
         [
-            InlineKeyboardButton("➕ Qo‘shish", callback_data=f"ADD:{pid}"),
+            InlineKeyboardButton("➕ Qo'shish", callback_data=f"ADD:{pid}"),
             InlineKeyboardButton("➖ Ayirish", callback_data=f"SUB:{pid}"),
         ],
         [InlineKeyboardButton("🧺 Savatcha", callback_data="CART")],
@@ -339,7 +339,7 @@ def kb_cart(user_id: int) -> InlineKeyboardMarkup:
 
 def kb_admin() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Mahsulot qo‘shish", callback_data="A_ADD")],
+        [InlineKeyboardButton("➕ Mahsulot qo'shish", callback_data="A_ADD")],
         [InlineKeyboardButton("🧾 Buyurtmalar", callback_data="A_ORDERS")],
         [InlineKeyboardButton("📣 Broadcast", callback_data="A_BC")],
         [InlineKeyboardButton("⬅️ Orqaga", callback_data="HOME")],
@@ -357,10 +357,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = (
         f"🛍 <b>{SHOP_NAME}</b>\n\n"
-        "Xush kelibsiz! Katalogdan mahsulot tanlang va savatchaga qo‘shing.\n\n"
+        "Xush kelibsiz! Katalogdan mahsulot tanlang va savatchaga qo'shing.\n\n"
         "✅ Buyurtma berish — savatchadan."
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main(is_admin(uid)))
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main(is_admin(uid))))
 
 async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -370,26 +370,26 @@ async def cmd_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🛠 Admin panel", reply_markup=kb_admin())
 
 async def show_home(query_or_msg, uid: int):
-    text = f"🛍 <b>{SHOP_NAME}</b>\n\nKerakli bo‘limni tanlang:"
+    text = f"🛍 <b>{SHOP_NAME}</b>\n\nKerakli bo'limni tanlang:"
     if hasattr(query_or_msg, "edit_message_text"):
-        await safe_edit_text(query_or_msg, text, parse_mode=ParseMode.HTML, reply_markup=kb_main(is_admin(uid)))
+        await safe_edit_text(query_or_msg, text, parse_mode=ParseMode.HTML, reply_markup=kb_main(is_admin(uid))))
     else:
-        await query_or_msg.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main(is_admin(uid)))
+        await query_or_msg.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb_main(is_admin(uid))))
 
 async def show_categories(query):
-    await safe_edit_text(query, "🛒 Katalog bo‘limlari:", reply_markup=kb_categories())
+    await safe_edit_text(query, "🛒 Katalog bo'limlari:", reply_markup=kb_categories())
 
 async def show_products(query, category_id: int):
     prods = get_products(category_id, only_active=True)
     if not prods:
-        await safe_edit_text(query, "Bu bo‘limda hozircha mahsulot yo‘q.", reply_markup=kb_categories())
+        await safe_edit_text(query, "Bu bo'limda hozircha mahsulot yo'q.", reply_markup=kb_categories())
         return
 
     rows = []
     for p in prods[:10]:
         rows.append([InlineKeyboardButton(f"{p['name']} — {money(float(p['price_sar']))}", callback_data=f"SHOW:{p['id']}")])
     rows.append([InlineKeyboardButton("⬅️ Orqaga", callback_data="CAT")])
-    await safe_edit_text(query, "Mahsulotlar:", reply_markup=InlineKeyboardMarkup(rows))
+    await safe_edit_text(query, "Mahsulotlar:", reply_markup=InlineKeyboardMarkup(rows)))
 
 async def show_product(query, uid: int, pid: int):
     p = get_product(pid)
@@ -411,14 +411,14 @@ async def show_product(query, uid: int, pid: int):
         if photo:
             await safe_edit_media(query, photo, caption, reply_markup=kb_product(pid), parse_mode=ParseMode.HTML)
         else:
-            await safe_edit_text(query, caption, parse_mode=ParseMode.HTML, reply_markup=kb_product(pid))
+            await safe_edit_text(query, caption, parse_mode=ParseMode.HTML, reply_markup=kb_product(pid)))
     except Exception:
-        await safe_edit_text(query, caption, parse_mode=ParseMode.HTML, reply_markup=kb_product(pid))
+        await safe_edit_text(query, caption, parse_mode=ParseMode.HTML, reply_markup=kb_product(pid)))
 
 async def show_cart(query, uid: int):
     items = cart_items(uid)
     if not items:
-        await safe_edit_text(query, "🧺 Savatcha bo‘sh.", reply_markup=kb_cart(uid))
+        await safe_edit_text(query, "🧺 Savatcha bo'sh.", reply_markup=kb_cart(uid)))
         return
 
     lines = []
@@ -426,11 +426,11 @@ async def show_cart(query, uid: int):
         lines.append(f"• {it['name']} x{it['qty']} = {money(float(it['price_sar']) * int(it['qty']))}")
     total = cart_total(uid)
     text = "🧺 <b>Savatcha</b>\n\n" + "\n".join(lines) + f"\n\n<b>Jami:</b> {money(total)}"
-    await safe_edit_text(query, text, parse_mode=ParseMode.HTML, reply_markup=kb_cart(uid))
+    await safe_edit_text(query, text, parse_mode=ParseMode.HTML, reply_markup=kb_cart(uid)))
 
 async def checkout_start(query, context: ContextTypes.DEFAULT_TYPE, uid: int):
     if not cart_items(uid):
-        await query.answer("Savatcha bo‘sh.")
+        await query.answer("Savatcha bo'sh.")
         return
     context.user_data["state"] = STATE_CHECKOUT_PHONE
     await safe_edit_text(query, "📞 Telefon raqamingizni yuboring (masalan: +9665xxxxxxx):")
@@ -442,18 +442,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == STATE_CHECKOUT_PHONE:
         context.user_data["phone"] = update.message.text.strip()
         context.user_data["state"] = STATE_CHECKOUT_ADDRESS
-        await update.message.reply_text("📍 Manzilni yozing (qayerga yetkazib beramiz?):")
+    await update.message.reply_text("📍 Manzilni yozing (qayerga yetkazib beramiz?):")
         return
 
     if state == STATE_CHECKOUT_ADDRESS:
         context.user_data["address"] = update.message.text.strip()
         context.user_data["state"] = STATE_CHECKOUT_NOTE
-        await update.message.reply_text("📝 Izoh (ixtiyoriy). Agar izoh yo‘q bo‘lsa 'yo‘q' deb yozing:")
-        return
+    await update.message.reply_text("📝 Izoh (ixtiyoriy). Agar izoh yo'q bo'lsa 'yo'q' deb yozing:")
 
     if state == STATE_CHECKOUT_NOTE:
         note = update.message.text.strip()
-        if note.lower() in ["yoq", "yo‘q", "yooq", "нет", "no"]:
+        if note.lower() in ["yoq", "yo'q", "yooq", "нет", "no"]:
             note = ""
         phone = context.user_data.get("phone", "")
         address = context.user_data.get("address", "")
@@ -461,13 +460,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["state"] = None
 
         if oid == -1:
-            await update.message.reply_text("Savatcha bo‘sh. Qaytadan urinib ko‘ring.")
+            await update.message.reply_text("Savatcha bo'sh. Qaytadan urinib ko'ring.")
             return
 
         await update.message.reply_text(
             f"✅ Buyurtma qabul qilindi! ID: <b>{oid}</b>\nTez orada aloqaga chiqamiz.",
             parse_mode=ParseMode.HTML,
-            reply_markup=kb_main(is_admin(uid)),
+            reply_markup=kb_main(is_admin(uid))),
         )
 
         if ADMIN_IDS:
@@ -502,19 +501,19 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             cat_id = int(parts[0])
         except Exception:
-            await update.message.reply_text("category_id raqam bo‘lsin.")
+            await update.message.reply_text("category_id raqam bo'lsin.")
             return
 
         name = parts[1]
         desc = parts[2] if len(parts) >= 3 else ""
-        photo = parts[3] if len(parts) >= 4 else "https://source.unsplash.com/800x600/?groceries"
+        photo = parts[3] if len(parts) >= 4 else "https://source.unsplash.com/800x600/?groceries")
 
-        conn = db()
+        conn = get_db()
         cur = conn.cursor()
         cur.execute("SELECT id FROM categories WHERE id=?", (cat_id,))
         if not cur.fetchone():
             conn.close()
-            await update.message.reply_text("Bunday category_id yo‘q. /admin → bo‘limlardan oling.")
+            await update.message.reply_text("/admin → bo'limlardan oling.")
             return
         cur.execute("""
             INSERT INTO products(category_id, name, description, price_sar, photo_url, is_active, created_at)
@@ -526,22 +525,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         context.user_data["state"] = STATE_SET_PRICE
         context.user_data["price_pid"] = pid
-        await update.message.reply_text(f"✅ Mahsulot qo‘shildi (ID={pid}). Endi narxini yuboring (faqat son):")
+        await update.message.reply_text(f"✅ Mahsulot qo'shildi (ID={pid}). Endi narxini yuboring (faqat son):")
         return
 
     if state == STATE_SET_PRICE:
         pid = int(context.user_data.get("price_pid", 0) or 0)
         try:
-            price = float(update.message.text.strip().replace(",", "."))
+            price = float(update.message.text.strip().replace(",", ".")))
         except Exception:
             await update.message.reply_text("Narx xato. Misol: 12.5")
             return
-        conn = db()
+        conn = get_db()
         conn.execute("UPDATE products SET price_sar=? WHERE id=?", (price, pid))
         conn.commit()
         conn.close()
         context.user_data["state"] = None
-        await update.message.reply_text("✅ Narx saqlandi.", reply_markup=kb_admin())
+        await update.message.reply_text("✅ Narx saqlandi.", reply_markup=kb_admin()))
         return
 
     if state == STATE_BROADCAST:
@@ -550,7 +549,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         context.user_data["state"] = None
         await update.message.reply_text(
-            "📣 Broadcast matni tayyor. Uni o‘zingiz kanal/guruhga yuboring.\n(Avto-broadcast uchun user bazasi kengaytiriladi.)"
+            "📣 Broadcast matni tayyor. Uni o'zingiz kanal/guruhga yuboring.\n(Avto-broadcast uchun user bazasi kengaytiriladi.)"
         )
         return
 
@@ -608,7 +607,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "CLEARCART":
         cart_clear(uid)
-        await safe_edit_text(query, "🧹 Savatcha tozalandi.", reply_markup=kb_main(is_admin(uid)))
+        await safe_edit_text(query, "🧹 Savatcha tozalandi.", reply_markup=kb_main(is_admin(uid)))))
         return
 
     if data == "CHECKOUT":
@@ -616,22 +615,22 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "CONTACT":
-        text = "☎️ Aloqa: admin bilan bog‘lanish.\n\nBuyurtma qilganingizdan so‘ng siz bilan aloqaga chiqamiz."
-        await safe_edit_text(query, text, reply_markup=kb_main(is_admin(uid)))
+        text = "☎️ Aloqa: admin bilan bog'lanish.\n\nBuyurtma qilganingizdan so'ng siz bilan aloqaga chiqamiz."
+        await safe_edit_text(query, text, reply_markup=kb_main(is_admin(uid)))))
         return
 
     if data == "ADMIN":
         if not is_admin(uid):
             await query.answer("Admin emassiz.")
             return
-        await safe_edit_text(query, "🛠 Admin panel", reply_markup=kb_admin())
+        await safe_edit_text(query, "🛠 Admin panel", reply_markup=kb_admin()))
         return
 
     if data == "A_ADD":
         if not is_admin(uid):
             return
         cats = get_categories()
-        lines = ["➕ Mahsulot qo‘shish", "", "Avval category_id ni tanlang (pastda):"]
+        lines = ["➕ Mahsulot qo'shish", "", "Avval category_id ni tanlang (pastda):"]
         for c in cats:
             lines.append(f"• <b>{c['id']}</b> — {c['name']}")
         lines += [
@@ -650,12 +649,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         orders = list_orders(10)
         if not orders:
-            await safe_edit_text(query, "Buyurtmalar yo‘q.", reply_markup=kb_admin())
+            await safe_edit_text(query, "Buyurtmalar yo'q.", reply_markup=kb_admin()))
             return
         lines = ["🧾 Oxirgi buyurtmalar:"]
         for o in orders:
             lines.append(f"• #{o['id']} | user {o['user_id']} | {money(float(o['total_sar']))} | {o['status']}")
-        await safe_edit_text(query, "\n".join(lines), reply_markup=kb_admin())
+        await safe_edit_text(query, "\n".join(lines), reply_markup=kb_admin()))
         return
 
     if data == "A_BC":
