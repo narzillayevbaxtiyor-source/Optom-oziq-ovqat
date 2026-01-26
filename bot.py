@@ -1,20 +1,20 @@
 import os
 import logging
 from flask import Flask, request
-from telegram import Update, Bot
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# ================= CONFIG =================
-BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 PORT = int(os.getenv("PORT", "10000"))
 
-if not BOT_TOKEN or not WEBHOOK_URL:
-    raise RuntimeError("Environment variables yo‘q")
+if not BOT_TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN yo‘q")
+if not WEBHOOK_URL:
+    raise RuntimeError("WEBHOOK_URL yo‘q")
 
 logging.basicConfig(level=logging.INFO)
 
-# ================= TELEGRAM =================
 application = Application.builder().token(BOT_TOKEN).build()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -22,24 +22,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 application.add_handler(CommandHandler("start", start))
 
-# ================= FLASK =================
 app = Flask(__name__)
 
 @app.get("/")
-def health():
+def home():
     return "OK", 200
 
+# Render health check GET bilan uradi, Telegram esa POST qiladi
 @app.route("/webhook", methods=["GET", "POST"])
 def webhook():
-    # Health check GET
     if request.method == "GET":
         return "OK", 200
 
-    # Telegram POST
     update = Update.de_json(request.get_json(force=True), application.bot)
     application.update_queue.put_nowait(update)
     return "OK", 200
-# ================= MAIN =================
+
 if __name__ == "__main__":
+    # webhookni o‘rnatib olamiz
     application.bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
+
+    # Flask serverni Render portida ochamiz
     app.run(host="0.0.0.0", port=PORT)
