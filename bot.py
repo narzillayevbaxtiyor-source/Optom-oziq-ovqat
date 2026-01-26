@@ -29,12 +29,16 @@ app = Flask(__name__)
 def health():
     return "OK", 200
 
-@app.post("/webhook")
+@app.route("/webhook", methods=["GET", "POST"])
 def webhook():
-    update = Update.de_json(request.json, application.bot)
+    # Health check GET
+    if request.method == "GET":
+        return "OK", 200
+
+    # Telegram POST
+    update = Update.de_json(request.get_json(force=True), application.bot)
     application.update_queue.put_nowait(update)
     return "OK", 200
-
 # ================= MAIN =================
 if __name__ == "__main__":
     application.bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
