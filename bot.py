@@ -1,12 +1,8 @@
-# =========================
-# OPTOM OZIK OVQAT MADINA BOT
-# =========================
-
 import os
+import json
 import sqlite3
+from datetime import datetime, timezone
 import requests
-from datetime import datetime
-
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -19,336 +15,299 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    ConversationHandler,
     ContextTypes,
+    ConversationHandler,
     filters,
 )
 
-# =========================
-# CONFIG
-# =========================
-BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "6248061970"))
+# -----------------------
+# CONFIG - TO'G'RILANGAN
+# -----------------------
+BOT_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+
+# Admin ID ni xavfsiz o'qish
+admin_id_str = os.getenv("ADMIN_ID")
+ADMIN_ID = int(admin_id_str) if admin_id_str and admin_id_str.isdigit() else 6248061970
+
 STORE_NAME = os.getenv("STORE_NAME", "Оптом_озик_овкат Мадина")
 CURRENCY = "SAR"
 
-DELIVERY_FEE = float(os.getenv("DELIVERY_FEE_SAR", "20"))
-MIN_ORDER = float(os.getenv("MIN_ORDER_SAR", "50"))
+DELIVERY_FEE_SAR = float(os.getenv("DELIVERY_FEE_SAR", "20"))
+MIN_ORDER_SAR = float(os.getenv("MIN_ORDER_SAR", "50"))
 
-DB = "shop.db"
+DB_PATH = os.getenv("DB_PATH", "shop.db")
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 
-# =========================
-# DB
-# =========================
+# -----------------------
+# DB FUNCTIONS - TO'G'RILANGAN
+# -----------------------
 def db():
-    c = sqlite3.connect(DB)
-    c.row_factory = sqlite3.Row
-    return c
-
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
-    con = db()
-    cur = con.cursor()
+    conn = db()
+    cur = conn.cursor()
 
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS products(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        price REAL,
-        category TEXT,
-        image TEXT,
-        active INTEGER DEFAULT 1
-    )
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            price REAL NOT NULL,
+            category TEXT NOT NULL,
+            image_url TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        )
     """)
 
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS carts(
-        user_id INTEGER,
-        product_id INTEGER,
-        qty INTEGER,
-        PRIMARY KEY(user_id, product_id)
-    )
+        CREATE TABLE IF NOT EXISTS carts (
+            user_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            qty INTEGER NOT NULL,
+            PRIMARY KEY (user_id, product_id)
+        )
     """)
 
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS users(
-        user_id INTEGER PRIMARY KEY,
-        name TEXT,
-        phone TEXT
-    )
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            full_name TEXT,
+            phone TEXT,
+            address TEXT,
+            lat REAL,
+            lon REAL,
+            updated_at TEXT
+        )
     """)
 
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS orders(
-        id TEXT,
-        user_id INTEGER,
-        total REAL,
-        status TEXT,
-        created TEXT
-    )
-    """)
+    conn.commit()
+    conn.close()
 
-    con.commit()
-    con.close()
+def seed_if_empty():
+    conn = db()
+    cur = conn.cursor()
+    c = cur.execute("SELECT COUNT(*) AS n FROM products").fetchone()["n"]
+    if c == 0:
+        # datetime.utcnow() -> datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc).isoformat()
+        demo = [
+            ("Guruch 5kg", 45.0, "🍚 Guruch / Don"),
+            ("O'simlik moyi 1L", 18.0, "🫒 Yog' / Moy"),
+            ("Qora choy (paket)", 15.0, "🍵 Choy / Ichimlik"),
+            ("Shakar 2kg", 9.0, "🍬 Shakar / Shirinlik"),
+        ]
+        for n, p, cat in demo:
+            cur.execute(
+                "INSERT INTO products(name, price, category, image_url, is_active, created_at) VALUES(?,?,?,?,?,?)",
+                (n, p, cat, None, 1, now),
+            )
+        conn.commit()
+    conn.close()
 
-
-# =========================
-# UTILS
-# =========================
-def safe_edit(q, text, kb=None):
+# -----------------------
+# WIKIMEDIA SEARCH - YANGILANGAN
+# -----------------------
+def commons_search_images(query: str, limit: int = 4):
+    """Yangi Wikimedia Commons API uchun yangilangan funksiya"""
     try:
-        return q.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
-    except:
-        pass
-
-
-def safe_send(bot, chat_id, text, kb=None):
-    try:
-        return bot.send_message(chat_id, text, reply_markup=kb, parse_mode="Markdown")
-    except:
-        pass
-
-
-# =========================
-# IMAGE SEARCH
-# =========================
-def search_image(query):
-    try:
-        r = requests.get(COMMONS_API, params={
+        # 1) Fayllarni qidirish
+        params = {
             "action": "query",
+            "format": "json",
             "list": "search",
             "srsearch": query,
-            "srnamespace": 6,
-            "format": "json"
-        }, timeout=10).json()
-
-        title = r["query"]["search"][0]["title"]
-        r2 = requests.get(COMMONS_API, params={
+            "srnamespace": "6",
+            "srlimit": limit,
+            "srwhat": "text",
+        }
+        
+        r = requests.get(COMMONS_API, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        
+        hits = data.get("query", {}).get("search", [])
+        if not hits:
+            return []
+        
+        # 2) Rasm ma'lumotlarini olish
+        titles = [f"File:{h['title']}" for h in hits]
+        
+        params2 = {
             "action": "query",
-            "titles": title,
+            "format": "json",
             "prop": "imageinfo",
             "iiprop": "url",
-            "format": "json"
-        }, timeout=10).json()
+            "iiurlwidth": "800",
+            "titles": "|".join(titles[:limit]),
+        }
+        
+        r2 = requests.get(COMMONS_API, params=params2, timeout=15)
+        r2.raise_for_status()
+        data2 = r2.json()
+        
+        pages = data2.get("query", {}).get("pages", {})
+        out = []
+        
+        for page_id, page in pages.items():
+            imageinfo = page.get("imageinfo", [])
+            if imageinfo:
+                thumb_url = imageinfo[0].get("thumburl")
+                if thumb_url:
+                    out.append(thumb_url)
+        
+        return out[:limit]
+        
+    except Exception as e:
+        print(f"Rasm qidirish xatosi: {e}")
+        return []
 
-        page = next(iter(r2["query"]["pages"].values()))
-        return page["imageinfo"][0]["url"]
-    except:
-        return None
+# -----------------------
+# CONVERSATION STATES - TO'G'RILANGAN
+# -----------------------
+# Checkout conversation states
+ASK_NAME, ASK_PHONE, ASK_LOCATION, ASK_ADDRESS, CONFIRM = range(5)
 
+# Admin add product states (alohida range)
+A_CAT, A_NAME, A_PRICE, A_PICK_IMAGE, A_UPLOAD_IMAGE = range(5, 10)
 
-# =========================
-# MENUS
-# =========================
-def main_menu(uid):
-    kb = [
-        [InlineKeyboardButton("🛒 Каталог", callback_data="catalog")],
-        [InlineKeyboardButton("🔍 Қидирув", callback_data="search")],
-        [InlineKeyboardButton("🧺 Саватча", callback_data="cart")],
-        [InlineKeyboardButton("📦 Буюртма бериш", callback_data="checkout")]
-    ]
-    if uid == ADMIN_ID:
-        kb.append([InlineKeyboardButton("👑 Админ", callback_data="admin")])
-    return InlineKeyboardMarkup(kb)
-
-
-# =========================
-# START
-# =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"👋 Ассалому алайкум!\n*{STORE_NAME}*",
-        reply_markup=main_menu(update.effective_user.id),
-        parse_mode="Markdown"
-    )
-
-
-# =========================
-# ADMIN PANEL
-# =========================
-A_CAT, A_NAME, A_PRICE = range(3)
-
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Маҳсулот қўшиш", callback_data="add")],
-        [InlineKeyboardButton("📣 Broadcast", callback_data="bc")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
-        [InlineKeyboardButton("⬅️ Орқага", callback_data="home")]
-    ])
-    await safe_edit(q, "👑 Админ панел", kb)
-
-
-async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("Категория номини ёзинг:")
-    return A_CAT
-
-
-async def add_cat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["cat"] = update.message.text
-    await update.message.reply_text("Маҳсулот номини ёзинг:")
-    return A_NAME
-
-
-async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["name"] = update.message.text
-    await update.message.reply_text("Нархни киритинг:")
-    return A_PRICE
-
-
-async def add_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    price = float(update.message.text)
-    name = context.user_data["name"]
-    cat = context.user_data["cat"]
-    img = search_image(name)
-
-    con = db()
-    con.execute(
-        "INSERT INTO products(name, price, category, image) VALUES(?,?,?,?)",
-        (name, price, cat, img)
-    )
-    con.commit()
-    con.close()
-
-    await update.message.reply_text("✅ Маҳсулот қўшилди", reply_markup=main_menu(ADMIN_ID))
-    return ConversationHandler.END
-
-
-# =========================
-# CART & CATALOG
-# =========================
-async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    con = db()
-    rows = con.execute("SELECT DISTINCT category FROM products WHERE active=1").fetchall()
-    con.close()
-
-    kb = [[InlineKeyboardButton(r["category"], callback_data=f"cat:{r['category']}")] for r in rows]
-    kb.append([InlineKeyboardButton("⬅️ Орқага", callback_data="home")])
-    await safe_edit(q, "Категориялар:", InlineKeyboardMarkup(kb))
-
-
-async def show_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    cat = q.data.split(":")[1]
-
-    con = db()
-    items = con.execute(
-        "SELECT * FROM products WHERE category=? AND active=1",
-        (cat,)
-    ).fetchall()
-    con.close()
-
-    for p in items:
-        try:
-            await context.bot.send_photo(
-                chat_id=q.message.chat_id,
-                photo=p["image"],
-                caption=f"*{p['name']}*\n{p['price']} {CURRENCY}",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("➕ Қўшиш", callback_data=f"addcart:{p['id']}")]
-                ]),
-                parse_mode="Markdown"
-            )
-        except:
-            pass
-
-
-async def add_to_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    pid = int(q.data.split(":")[1])
-    uid = q.from_user.id
-
-    con = db()
-    cur = con.cursor()
-    row = cur.execute(
-        "SELECT qty FROM carts WHERE user_id=? AND product_id=?",
-        (uid, pid)
-    ).fetchone()
-
-    if row:
-        cur.execute(
-            "UPDATE carts SET qty=qty+1 WHERE user_id=? AND product_id=?",
-            (uid, pid)
-        )
-    else:
-        cur.execute(
-            "INSERT INTO carts VALUES(?,?,1)",
-            (uid, pid)
-        )
-
-    con.commit()
-    con.close()
-
-    await q.answer("Қўшилди ✅", show_alert=False)
-
-
-# =========================
-# SEARCH
-# =========================
-SEARCH = 10
-
-async def search_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text("Қидирилаётган маҳсулотни ёзинг:")
-    return SEARCH
-
-
-async def search_do(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = f"%{update.message.text.lower()}%"
-    con = db()
-    rows = con.execute(
-        "SELECT id,name,price FROM products WHERE lower(name) LIKE ?",
-        (text,)
-    ).fetchall()
-    con.close()
-
-    if not rows:
-        await update.message.reply_text("Топилмади")
-        return ConversationHandler.END
-
-    kb = [[InlineKeyboardButton(f"{r['name']} — {r['price']} {CURRENCY}", callback_data=f"addcart:{r['id']}")] for r in rows]
-    await update.message.reply_text("Натижалар:", reply_markup=InlineKeyboardMarkup(kb))
-    return ConversationHandler.END
-
-
-# =========================
-# MAIN
-# =========================
+# -----------------------
+# MAIN FUNCTION - TO'G'RILANGAN
+# -----------------------
 def main():
+    if not BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_TOKEN environment variable o'rnatilmagan")
+    
     init_db()
+    seed_if_empty()
+    
     app = Application.builder().token(BOT_TOKEN).build()
-
+    
+    # User handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(show_catalog, pattern="^catalog$"))
-    app.add_handler(CallbackQueryHandler(show_category, pattern="^cat:"))
-    app.add_handler(CallbackQueryHandler(add_to_cart, pattern="^addcart:"))
-    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
-
-    app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(add_start, pattern="^add$")],
+    
+    # Menu handler - patternlarni aniqroq qilish
+    app.add_handler(CallbackQueryHandler(
+        on_menu, 
+        pattern="^(menu_catalog|menu_cart|menu_rules|menu_checkout|admin:panel|admin:add)$"
+    ))
+    
+    # Back handler alohida
+    app.add_handler(CallbackQueryHandler(
+        on_back, 
+        pattern="^back:"
+    ))
+    
+    app.add_handler(CallbackQueryHandler(on_category, pattern="^cat:"))
+    app.add_handler(CallbackQueryHandler(on_product, pattern="^p:"))
+    app.add_handler(CallbackQueryHandler(on_qty, pattern="^qty:"))
+    app.add_handler(CallbackQueryHandler(on_cart_qty, pattern="^c:"))
+    app.add_handler(CallbackQueryHandler(on_cart_clear, pattern="^cart:clear$"))
+    
+    # Checkout conversation
+    checkout_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(checkout_start, pattern="^menu_checkout$")],
         states={
-            A_CAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_cat)],
-            A_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
-            A_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_price)],
+            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, checkout_name)],
+            ASK_PHONE: [
+                MessageHandler(filters.CONTACT, checkout_phone),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, checkout_phone),
+            ],
+            ASK_LOCATION: [MessageHandler(filters.LOCATION, checkout_location)],
+            ASK_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, checkout_address)],
+            CONFIRM: [CallbackQueryHandler(checkout_confirm, pattern="^order:(confirm|cancel)$")],
         },
-        fallbacks=[]
-    ))
-
-    app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(search_start, pattern="^search$")],
-        states={SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_do)]},
-        fallbacks=[]
-    ))
-
+        fallbacks=[CommandHandler("cancel", cancel_checkout)],
+        allow_reentry=True,
+    )
+    app.add_handler(checkout_conv)
+    
+    # Admin add product conversation
+    admin_add_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(admin_add_start, pattern="^admin:add$")],
+        states={
+            A_CAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_cat)],
+            A_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_name)],
+            A_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_price)],
+            A_PICK_IMAGE: [
+                CallbackQueryHandler(admin_pick_image, pattern="^admin:(pick:|upload_image|skip_image)")
+            ],
+            A_UPLOAD_IMAGE: [MessageHandler(filters.PHOTO, admin_upload_image)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel_admin)],
+        allow_reentry=True,
+    )
+    app.add_handler(admin_add_conv)
+    
     app.run_polling()
 
+# -----------------------
+# YANGI FUNKSIYALAR - TO'G'RILANGAN
+# -----------------------
+async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Back tugmasi uchun handler"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    where = query.data.split(":", 1)[1]
+    if where == "home":
+        await query.edit_message_text(
+            f"Assalomu alaykum! 👋\n*{STORE_NAME}*",
+            reply_markup=main_menu_kb(user_id),
+            parse_mode="Markdown"
+        )
+    elif where == "cats":
+        await query.edit_message_text(
+            "🛒 Kategoriyalar:",
+            reply_markup=categories_kb()
+        )
+
+async def checkout_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Checkout boshlanishi"""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    if not cart_items(user_id):
+        await query.edit_message_text(
+            "Avval savatchaga mahsulot qo'shing 🙂",
+            reply_markup=main_menu_kb(user_id)
+        )
+        return ConversationHandler.END
+    
+    await query.edit_message_text("👤 Ism-familyangizni yozing:")
+    return ASK_NAME
+
+async def admin_add_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin mahsulot qo'shishni boshlash"""
+    query = update.callback_query
+    await query.answer()
+    
+    if query.from_user.id != ADMIN_ID:
+        await query.edit_message_text("Ruxsat yo'q.", reply_markup=main_menu_kb(query.from_user.id))
+        return ConversationHandler.END
+    
+    await query.edit_message_text("Kategoriya nomini yozing.\nMasalan: 🍚 Guruch / Don")
+    return A_CAT
+
+async def cancel_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Checkoutni bekor qilish"""
+    await update.message.reply_text(
+        "Buyurtma bekor qilindi.",
+        reply_markup=main_menu_kb(update.effective_user.id)
+    )
+    return ConversationHandler.END
+
+async def cancel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin rejimini bekor qilish"""
+    await update.message.reply_text(
+        "Admin rejimi bekor qilindi.",
+        reply_markup=main_menu_kb(update.effective_user.id)
+    )
+    return ConversationHandler.END
 
 if __name__ == "__main__":
     main()
