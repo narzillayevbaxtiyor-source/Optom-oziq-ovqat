@@ -780,7 +780,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👤 User ID: {user_id}\n"
             f"📌 Status: {new_status}",
             reply_markup=kb
-        ) )
+        ) 
         return
 
     # Agar noma'lum callback kelsa
